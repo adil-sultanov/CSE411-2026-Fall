@@ -1,7 +1,6 @@
 package simplelexersubset;
 
 import java.util.ArrayDeque;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -177,8 +176,31 @@ public final class SimpleLexer {
 
     /* Converts an NFA to a DFA using the subset construction algorithm. */
     static Dfa convertNfaToDfa(final Nfa nfa) {
-      // TODO: Implement the subset construction algorithm to convert the NFA to a DFA.
-      return null; // TODO: Replace it with the actual DFA instance.
+      Set<Nfa.State> start_subset = closure(new HashSet<>(Set.of(nfa.start)));
+      State start_state = new State(acceptingType(start_subset));
+      
+      Map<Set<Nfa.State>, State> states = new HashMap<Set<Nfa.State>, State>();
+      states.put(start_subset, start_state);
+
+      Queue<Set<Nfa.State>> q = new ArrayDeque<Set<Nfa.State>>();
+      q.add(start_subset);
+      while (!q.isEmpty()) {
+        Set<Nfa.State> cur_subset = q.remove();
+        State cur_state = states.get(cur_subset);
+        for (char c : nfa.alphabet) {
+          Set<Nfa.State> to_subset = closure(move(cur_subset, c));
+          if (to_subset.isEmpty()) continue;
+
+          State to_state = states.get(to_subset);
+          if (to_state == null) {
+            to_state = new State(acceptingType(to_subset));
+            states.put(to_subset, to_state);
+            q.add(to_subset);
+          }
+          cur_state.transitions.put(c, to_state);
+        }
+      }
+      return new Dfa(start_state);
     }
 
     private static Set<Nfa.State> move(final Set<Nfa.State> states, final Character character) {
