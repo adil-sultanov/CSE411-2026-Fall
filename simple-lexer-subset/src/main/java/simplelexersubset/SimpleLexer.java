@@ -75,13 +75,17 @@ public final class SimpleLexer {
     /* Constructs an NFA for the given set of tokens. */
     static Nfa construct() {
       final Nfa nfa = new Nfa();
-      // IF | [A-Za-z_][A-Za-z0-9_]* | 0 | [1-9][0-9]*
+      // IF | [A-Za-z_][A-Za-z0-9_]* | 0 | [1-9][0-9]* | ( | ) | + | *
       nfa.add(nfa.word("if"), Token.Type.IF);
       nfa.add(nfa.concat(nfa.chars(identifierStart()), nfa.star(nfa.chars(identifierPart()))),
           Token.Type.ID);
       nfa.add(nfa.chars("0"), Token.Type.INT);
       nfa.add(nfa.concat(nfa.chars("123456789"), nfa.star(nfa.chars("0123456789"))),
           Token.Type.INT);
+      nfa.add(nfa.chars("("), Token.Type.LPAREN);
+      nfa.add(nfa.chars(")"), Token.Type.RPAREN);
+      nfa.add(nfa.chars("+"), Token.Type.PLUS);
+      nfa.add(nfa.chars("*"), Token.Type.STAR);
       return nfa;
     }
 
@@ -247,7 +251,10 @@ public final class SimpleLexer {
       if (type == Token.Type.ID) {
         return 1;
       }
-      return 2;
+      if (type == Token.Type.INT) {
+        return 2;
+      }
+      return 3;
     }
 
     private static final class State {
