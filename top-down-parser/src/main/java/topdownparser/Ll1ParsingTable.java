@@ -36,8 +36,83 @@ public final class Ll1ParsingTable {
 
   /** Constructs the complete table, including conflicting cells when they exist. */
   public static Ll1ParsingTable build(final Grammar grammar) {
-    // TODO: Complete this method
-    return null; // TODO: replace the return value.
+    Map<String, Set<String>> first = computeFirstSets(grammar);
+    Map<String, Set<String>> follow = computeFollowSets(grammar, first);
+
+    Map<String, Map<String, List<Production>>> M = new LinkedHashMap<String, Map<String, List<Production>>>();
+
+    for (String nonterminal : grammar.getNonterminals()) {
+      M.put(nonterminal, new LinkedHashMap<String, List<Production>>());
+    }
+
+    for (Production p : grammar.getProductions()) {
+      List<String> right = p.getRightHandSide();
+      String left = p.getLeftHandSide();
+
+      Set<String> firsts = firstOfSequence(right, grammar, first);
+      boolean hasEpsilon = false;
+      for (String terminal : firsts) {
+        if (terminal.equals(Grammar.EPSILON)) hasEpsilon = true;
+        else add(M, left, terminal, p);
+      }
+
+      if (hasEpsilon) 
+        for (String terminal : follow.get(left)) 
+          add(M, left, terminal, p);
+    }
+    return new Ll1ParsingTable(grammar, first, follow, M);
+  }
+
+  private static Map<String, Set<String>> computeFirstSets(final Grammar grammar) {
+    Map<String, Set<String>> first = initialSets(grammar);
+    while (true) {
+      boolean updated = false;
+      for (Production p : grammar.getProductions()) {
+        List<String> right = p.getRightHandSide();
+        String left = p.getLeftHandSide();
+
+        Set<String> firsts = firstOfSequence(right, grammar, first);
+        for (String x : firsts) 
+          if (first.get(left).add(x)) 
+            updated = true;
+      }
+      if (!updated) break;
+    }
+    return first;
+  }
+
+  private static Map<String, Set<String>> computeFollowSets(final Grammar grammar, final Map<String, Set<String>> first) {
+    Map<String, Set<String>> follow = initialSets(grammar);
+    follow.get(grammar.getStartSymbol()).add(Grammar.END_MARKER);
+    while (true) {
+      boolean updated = false;
+      for (Production p : grammar.getProductions()) {
+        List<String> right = p.getRightHandSide();
+        String left = p.getLeftHandSide();
+
+        for (int i = 0; i < right.size(); ++i) {
+          String nonterminal = right.get(i);
+          if (!grammar.getNonterminals().contains(nonterminal)) continue;
+
+          Set<String> firsts = firstOfSequence(right.subList(i+1, right.size()), grammar, first);
+          boolean hasEpsilon = false;
+          for (String x : firsts) {
+            if (x.equals(Grammar.EPSILON))
+              hasEpsilon = true;
+            else if (follow.get(nonterminal).add(x)) 
+              updated = true;
+          }
+
+          if (!hasEpsilon) continue;
+
+          for (String x : follow.get(left))
+            if (follow.get(nonterminal).add(x))
+              updated = true;
+        }
+      }
+      if (!updated) break;
+    }
+    return follow;
   }
 
   public Grammar getGrammar() {
