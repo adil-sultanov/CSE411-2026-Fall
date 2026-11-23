@@ -10,6 +10,7 @@ import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.ASTVisitor;
 import org.eclipse.jdt.core.dom.ArrayAccess;
 import org.eclipse.jdt.core.dom.ArrayCreation;
+import org.eclipse.jdt.core.dom.ArrayInitializer;
 import org.eclipse.jdt.core.dom.Assignment;
 import org.eclipse.jdt.core.dom.Block;
 import org.eclipse.jdt.core.dom.BooleanLiteral;
@@ -298,49 +299,129 @@ public final class LLVMIRGenerator {
 
       @Override
       public boolean visit(final Block node) {
-        // TODO
+        this.handled = true;
+        for (Object o : node.statements()) emitStatement((Statement) o);
         return false;
       }
 
       @Override
       public boolean visit(final ExpressionStatement node) {
-        // TODO
+        this.handled = true;
+        emitSideEffect(node.getExpression());
         return false;
       }
 
       @Override
       public boolean visit(final IfStatement node) {
-        // TODO
+        this.handled = true;
+        Value cond = emitExpression(node.getExpression());
+        Statement elseStmt = node.getElseStatement();
+        String thenLabel = label("if.then");
+        String elseLabel = (elseStmt != null) ? label("if.else") : null;
+        String endLabel = label("if.end");
+        branch(cond, thenLabel, (elseLabel != null) ? elseLabel : endLabel);
+
+        startBlock(thenLabel);
+        emitStatement(node.getThenStatement());
+        if (!terminated) jump(endLabel);
+
+        if (elseStmt != null) {
+          startBlock(elseLabel);
+          emitStatement(elseStmt);
+          if (!terminated) jump(endLabel);
+        }
+
+        startBlock(endLabel);
         return false;
       }
 
       @Override
       public boolean visit(final WhileStatement node) {
-        // TODO
+        this.handled = true;
+        String condLabel = label("while.cond");
+        String bodyLabel = label("while.body");
+        String endLabel = label("while.end");
+        jump(condLabel);
+
+        startBlock(condLabel);
+        Value cond = emitExpression(node.getExpression());
+        branch(cond, bodyLabel, endLabel);
+
+        startBlock(bodyLabel);
+        emitStatement(node.getBody());
+        if (!terminated) jump(condLabel);
+
+        startBlock(endLabel);
         return false;
       }
 
       @Override
       public boolean visit(final DoStatement node) {
-        // TODO
+        this.handled = true;
+        String bodyLabel = label("do.body");
+        String condLabel = label("do.cond");
+        String endLabel = label("do.end");
+        jump(bodyLabel);
+
+        startBlock(bodyLabel);
+        emitStatement(node.getBody());
+        if (!terminated) jump(condLabel);
+
+        startBlock(condLabel);
+        Value cond = emitExpression(node.getExpression());
+        branch(cond, bodyLabel, endLabel);
+
+        startBlock(endLabel);
         return false;
       }
 
       @Override
       public boolean visit(final ForStatement node) {
-        // TODO
+        this.handled = true;
+        for (Object o : node.initializers()) emitSideEffect((Expression) o);
+
+        String condLabel = label("for.cond");
+        String bodyLabel = label("for.body");
+        String updateLabel = label("for.update");
+        String endLabel = label("for.end");
+        jump(condLabel);
+
+        startBlock(condLabel);
+        Expression e = node.getExpression();
+        if (e == null) jump(bodyLabel);
+        else branch(emitExpression(e), bodyLabel, endLabel);
+
+        startBlock(bodyLabel);
+        emitStatement(node.getBody());
+        if (!terminated) jump(updateLabel);
+
+        startBlock(updateLabel);
+        for (Object o : node.updaters()) emitSideEffect((Expression) o);
+        jump(condLabel);
+
+        startBlock(endLabel);
         return false;
       }
 
       @Override
       public boolean visit(final ReturnStatement node) {
-        // TODO
+        this.handled = true;
+        Expression e = node.getExpression();
+        if (e == null) {
+          line("ret void");
+        } else {
+          Value v = emitExpression(e);
+          line("ret " + llvmType(returnType) + " " + v.operand);
+        }
+
+        terminated = true;
         return false;
       }
 
       @Override
       public boolean visit(final VariableDeclarationStatement node) {
-        // TODO
+        // locals are allocated up front in allocateLocals()
+        this.handled = true;
         return false;
       }
 
@@ -394,93 +475,331 @@ public final class LLVMIRGenerator {
 
       @Override
       public boolean visit(final Assignment node) {
-        // TODO
+        this.handled = true;
+        // Java evaluates the left-hand side's subexpressions first
+        Address target = emitAddress(node.getLeftHandSide());
+        Value v = emitExpression(node.getRightHandSide());
+        store(v, target);
+        this.value = v;
         return false;
       }
 
       @Override
       public boolean visit(final PostfixExpression node) {
-        // TODO
+        this.handled = true;
+        Address target = emitAddress(node.getOperand());
+        Value old = load(target);
+        String op = (node.getOperator() == PostfixExpression.Operator.INCREMENT)
+            ? "add"
+            : "sub";
+        String t = temp();
+        line(t + " = " + op + " i32 " + old.operand + ", 1");
+        store(new Value(old.type, t), target);
+        this.value = old;
         return false;
       }
 
       @Override
       public boolean visit(final NumberLiteral node) {
-        // TODO
+        this.handled = true;
+        this.value = new Value(requireType(node),
+            String.valueOf(parseInt(node, node.getToken())));
         return false;
       }
 
       @Override
       public boolean visit(final BooleanLiteral node) {
-        // TODO
+        this.handled = true;
+        this.value = new Value(requireType(node),
+            node.booleanValue() ? "true" : "false");
         return false;
       }
 
       @Override
       public boolean visit(final NullLiteral node) {
-        // TODO
+        this.handled = true;
+        this.value = new Value(requireType(node), "null");
         return false;
       }
 
       @Override
       public boolean visit(final ParenthesizedExpression node) {
-        // TODO
+        this.handled = true;
+        this.value = emitExpression(node.getExpression());
         return false;
       }
 
       @Override
       public boolean visit(final SimpleName node) {
-        // TODO
+        this.handled = true;
+        this.value = load(emitAddress(node));
         return false;
       }
 
       @Override
       public boolean visit(final ArrayAccess node) {
-        // TODO
+        this.handled = true;
+        this.value = load(emitAddress(node));
         return false;
       }
 
       @Override
       public boolean visit(final FieldAccess node) {
-        // TODO
+        this.handled = true;
+        this.value = load(emitAddress(node));
         return false;
       }
 
       @Override
       public boolean visit(final PrefixExpression node) {
-        // TODO
+        this.handled = true;
+        Value v = emitExpression(node.getOperand());
+        PrefixExpression.Operator op = node.getOperator();
+        if (op == PrefixExpression.Operator.PLUS) {
+          this.value = v;
+          return false;
+        }
+
+        String t = temp();
+        if (op == PrefixExpression.Operator.MINUS)
+          line(t + " = sub i32 0, " + v.operand);
+        else if (op == PrefixExpression.Operator.COMPLEMENT)
+          line(t + " = xor i32 " + v.operand + ", -1");
+        else if (op == PrefixExpression.Operator.NOT)
+          line(t + " = xor i1 " + v.operand + ", true");
+        else
+          throw error(node, "Unsupported prefix operator: " + op);
+
+        this.value = new Value(requireType(node), t);
         return false;
       }
 
       @Override
       public boolean visit(final InfixExpression node) {
-        // TODO
+        this.handled = true;
+        InfixExpression.Operator op = node.getOperator();
+        if ((op == InfixExpression.Operator.CONDITIONAL_AND)
+            || (op == InfixExpression.Operator.CONDITIONAL_OR)) {
+          this.value = emitShortCircuit(node);
+          return false;
+        }
+
+        Value l = emitExpression(node.getLeftOperand());
+        Value r = emitExpression(node.getRightOperand());
+        String instruction = binaryInstruction(node, l.type);
+
+        // Java only uses the low 5 bits of an int shift distance
+        String rhs = r.operand;
+        if ((op == InfixExpression.Operator.LEFT_SHIFT)
+            || (op == InfixExpression.Operator.RIGHT_SHIFT_SIGNED)
+            || (op == InfixExpression.Operator.RIGHT_SHIFT_UNSIGNED)) {
+          rhs = temp();
+          line(rhs + " = and i32 " + r.operand + ", 31");
+        }
+
+        String t = temp();
+        line(t + " = " + instruction + " " + l.operand + ", " + rhs);
+        this.value = new Value(requireType(node), t);
         return false;
       }
 
       @Override
       public boolean visit(final ConditionalExpression node) {
-        // TODO
+        this.handled = true;
+        Value cond = emitExpression(node.getExpression());
+        String thenLabel = label("cond.then");
+        String elseLabel = label("cond.else");
+        String endLabel = label("cond.end");
+        branch(cond, thenLabel, elseLabel);
+
+        startBlock(thenLabel);
+        Value thenValue = emitExpression(node.getThenExpression());
+        String thenEnd = block;
+        jump(endLabel);
+
+        startBlock(elseLabel);
+        Value elseValue = emitExpression(node.getElseExpression());
+        String elseEnd = block;
+        jump(endLabel);
+
+        startBlock(endLabel);
+        Type type = requireType(node);
+        String t = temp();
+        line(t + " = phi " + llvmType(type) + " [ " + thenValue.operand + ", %"
+            + thenEnd + " ], [ " + elseValue.operand + ", %" + elseEnd + " ]");
+        this.value = new Value(type, t);
         return false;
       }
 
       @Override
       public boolean visit(final MethodInvocation node) {
-        // TODO
+        this.handled = true;
+        Object decl = symbols.get(node);
+        String callee;
+        if (decl instanceof MethodDeclaration)
+          callee = functionName((MethodDeclaration) decl);
+        else if (decl instanceof Method)
+          callee = runtimeFunction((Method) decl);
+        else
+          throw error(node, "Unresolved method invocation: " + node);
+
+        Pair<Type, List<Type>> signature = requireMethodType(decl);
+        StringBuilder args = new StringBuilder();
+        for (int i = 0; i < node.arguments().size(); i++) {
+          Value v = emitExpression((Expression) node.arguments().get(i));
+          if (i != 0) args.append(", ");
+          args.append(llvmType(signature.second.get(i))).append(' ')
+              .append(v.operand);
+        }
+
+        String call = "call " + llvmType(signature.first) + " " + callee + "("
+            + args + ")";
+        if (signature.first instanceof VoidType) {
+          line(call);
+          this.value = new Value(signature.first, "");
+        } else {
+          String t = temp();
+          line(t + " = " + call);
+          this.value = new Value(signature.first, t);
+        }
+
         return false;
       }
 
       @Override
       public boolean visit(final ArrayCreation node) {
-        // TODO
+        this.handled = true;
+        ArrayType type = (ArrayType) requireType(node);
+        Type element = type.baseType;
+        ArrayInitializer init = node.getInitializer();
+
+        String count;
+        if (init != null) {
+          count = String.valueOf(init.expressions().size());
+        } else {
+          Value length = emitExpression((Expression) node.dimensions().get(0));
+          count = temp();
+          line(count + " = sext i32 " + length.operand + " to i64");
+        }
+
+        String array = temp();
+        line(array + " = call ptr @sj_calloc(i64 " + count + ", i64 "
+            + allocationSize(element) + ")");
+
+        if (init != null) {
+          for (int i = 0; i < init.expressions().size(); i++) {
+            Value v = emitExpression((Expression) init.expressions().get(i));
+            String slot = temp();
+            line(slot + " = getelementptr " + llvmType(element) + ", ptr "
+                + array + ", i32 " + i);
+            store(v, new Address(slot, element));
+          }
+        }
+
+        this.value = new Value(type, array);
         return false;
       }
 
       @Override
       public boolean visit(final ClassInstanceCreation node) {
-        // TODO
+        this.handled = true;
+        ClassType type = (ClassType) requireType(node);
+        String t = temp();
+        line(t + " = call ptr @sj_calloc(i64 1, i64 ptrtoint (ptr getelementptr ("
+            + classType(type.name) + ", ptr null, i32 1) to i64))");
+        this.value = new Value(type, t);
         return false;
       }
+    }
+
+    /**
+     * Computes the memory location of an assignable expression: a local
+     * variable, a static field of the main class, an object field, or an
+     * array element.
+     */
+    private Address emitAddress(Expression e) {
+      if (e instanceof SimpleName) {
+        SimpleName name = (SimpleName) e;
+        Object decl = symbols.get(name);
+        if (decl instanceof FieldDeclaration) {
+          FieldDeclaration fd = (FieldDeclaration) decl;
+          String owner =
+              ((TypeDeclaration) fd.getParent()).getName().getIdentifier();
+          return new Address(globalName(owner, name.getIdentifier()),
+              requireType(fd));
+        }
+
+        Slot slot = this.locals.get(name.getIdentifier());
+        if (slot == null) throw error(e, "Unknown variable: " + name);
+        return new Address(slot.address, slot.type);
+      }
+
+      if (e instanceof FieldAccess) {
+        FieldAccess fa = (FieldAccess) e;
+        Value object = emitExpression(fa.getExpression());
+        if (!(object.type instanceof ClassType))
+          throw error(e, "Field access on a non-class value: " + e);
+
+        String className = ((ClassType) object.type).name;
+        FieldDeclaration fd = findField(e, className,
+            fa.getName().getIdentifier());
+        String t = temp();
+        line(t + " = getelementptr inbounds " + classType(className) + ", ptr "
+            + object.operand + ", i32 0, i32 " + fieldIndices.get(fd));
+        return new Address(t, requireType(fd));
+      }
+
+      if (e instanceof ArrayAccess) {
+        ArrayAccess aa = (ArrayAccess) e;
+        Value array = emitExpression(aa.getArray());
+        Value index = emitExpression(aa.getIndex());
+        Type element = ((ArrayType) array.type).baseType;
+        String t = temp();
+        line(t + " = getelementptr " + llvmType(element) + ", ptr "
+            + array.operand + ", i32 " + index.operand);
+        return new Address(t, element);
+      }
+
+      if (e instanceof ParenthesizedExpression)
+        return emitAddress(((ParenthesizedExpression) e).getExpression());
+
+      throw error(e, "Not an assignable expression: " + e);
+    }
+
+    private Value load(Address address) {
+      String t = temp();
+      line(t + " = load " + llvmType(address.type) + ", ptr " + address.pointer);
+      return new Value(address.type, t);
+    }
+
+    private void store(Value v, Address address) {
+      line("store " + llvmType(address.type) + " " + v.operand + ", ptr "
+          + address.pointer);
+    }
+
+    /**
+     * Lowers && and || with short-circuit evaluation: the right operand is
+     * only evaluated when the left one does not decide the result.
+     */
+    private Value emitShortCircuit(InfixExpression node) {
+      boolean and = node.getOperator() == InfixExpression.Operator.CONDITIONAL_AND;
+      Value l = emitExpression(node.getLeftOperand());
+      String leftEnd = this.block;
+      String rhsLabel = label(and ? "and.rhs" : "or.rhs");
+      String endLabel = label(and ? "and.end" : "or.end");
+      if (and) branch(l, rhsLabel, endLabel);
+      else branch(l, endLabel, rhsLabel);
+
+      startBlock(rhsLabel);
+      Value r = emitExpression(node.getRightOperand());
+      String rightEnd = this.block;
+      jump(endLabel);
+
+      startBlock(endLabel);
+      String t = temp();
+      line(t + " = phi i1 [ " + (and ? "false" : "true") + ", %" + leftEnd
+          + " ], [ " + r.operand + ", %" + rightEnd + " ]");
+      return new Value(requireType(node), t);
     }
 
     private void branch(final Value condition, final String yes,
@@ -544,6 +863,61 @@ public final class LLVMIRGenerator {
     Value(final Type type, final String operand) {
       this.type = type;
       this.operand = operand;
+    }
+  }
+
+  /** Finds the declaration of field {@code name} in class {@code className}. */
+  private FieldDeclaration findField(ASTNode node, String className,
+      String name) {
+    TypeDeclaration declaration = this.classes.get(className);
+    if (declaration == null) throw error(node, "Unknown class: " + className);
+
+    for (FieldDeclaration fd : declaration.getFields()) {
+      VariableDeclarationFragment fragment =
+          (VariableDeclarationFragment) fd.fragments().get(0);
+      if (fragment.getName().getIdentifier().equals(name)) return fd;
+    }
+
+    throw error(node, "Unknown field: " + className + "." + name);
+  }
+
+  /** Returns the LLVM instruction (with operand type) for a binary operator. */
+  private static String binaryInstruction(InfixExpression node,
+      Type operandType) {
+    InfixExpression.Operator op = node.getOperator();
+    if (op == InfixExpression.Operator.PLUS) return "add i32";
+    if (op == InfixExpression.Operator.MINUS) return "sub i32";
+    if (op == InfixExpression.Operator.TIMES) return "mul i32";
+    if (op == InfixExpression.Operator.DIVIDE) return "sdiv i32";
+    if (op == InfixExpression.Operator.REMAINDER) return "srem i32";
+    if (op == InfixExpression.Operator.LEFT_SHIFT) return "shl i32";
+    if (op == InfixExpression.Operator.RIGHT_SHIFT_SIGNED) return "ashr i32";
+    if (op == InfixExpression.Operator.RIGHT_SHIFT_UNSIGNED) return "lshr i32";
+    if (op == InfixExpression.Operator.LESS) return "icmp slt i32";
+    if (op == InfixExpression.Operator.LESS_EQUALS) return "icmp sle i32";
+    if (op == InfixExpression.Operator.GREATER) return "icmp sgt i32";
+    if (op == InfixExpression.Operator.GREATER_EQUALS) return "icmp sge i32";
+    if (op == InfixExpression.Operator.EQUALS)
+      return "icmp eq " + llvmType(operandType);
+    if (op == InfixExpression.Operator.NOT_EQUALS)
+      return "icmp ne " + llvmType(operandType);
+
+    throw error(node, "Unsupported binary operator: " + op);
+  }
+
+  /**
+   * Parses an int literal token. Values are wrapped to 32 bits so that
+   * 2147483648 (only legal as the operand of unary minus) becomes
+   * Integer.MIN_VALUE.
+   */
+  private static int parseInt(ASTNode node, String token) {
+    String digits = token.replace("_", "");
+    try {
+      if (digits.startsWith("0b") || digits.startsWith("0B"))
+        return (int) Long.parseLong(digits.substring(2), 2);
+      return (int) Long.decode(digits).longValue();
+    } catch (NumberFormatException e) {
+      throw error(node, "Invalid int literal: " + token);
     }
   }
 
