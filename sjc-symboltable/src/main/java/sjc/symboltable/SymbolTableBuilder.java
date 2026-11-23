@@ -114,33 +114,98 @@ public class SymbolTableBuilder {
       return false;
     }
 
+    private void declareLocal(SimpleName name, ASTNode decl) {
+      String id = name.getIdentifier();
+      if (this.localNames.contains(id)) {
+        throw new Error(name, "Duplicate variable: " + id);
+      }
+
+      this.localNames.add(id);
+      this.nameMap.put(id, decl);
+    }
+
     @Override
     public boolean visit(final FieldDeclaration node) {
-      // TODO
+      VariableDeclarationFragment vdf =
+          (VariableDeclarationFragment) node.fragments().get(0);
+      String name = vdf.getName().getIdentifier();
+      Pair<String, String> key = new Pair<>(this.className, name);
+      if (this.fieldMap.containsKey(key)) {
+        throw new Error(node, "Duplicate field: " + name);
+      }
+
+      this.fieldMap.put(key, node);
+
+      if (!hasPublicModifier(node.modifiers())) {
+        this.nameMap.put(name, node);
+      }
+
       return false;
     }
 
     @Override
     public boolean visit(final MethodDeclaration node) {
-      // TODO
+      this.localNames.clear();
+
+      for (Object o : node.parameters()) {
+        SingleVariableDeclaration svd = (SingleVariableDeclaration) o;
+        declareLocal(svd.getName(), svd);
+      }
+
+      node.getBody().accept(this);
+
+      for (String name : this.localNames) {
+        this.nameMap.remove(name);
+
+        Pair<String, String> key = new Pair<>(this.className, name);
+        FieldDeclaration fd = this.fieldMap.get(key);
+        if (fd != null) {
+          this.nameMap.put(name, fd);
+        }
+      }
+
       return false;
     }
 
     @Override
     public boolean visit(final MethodInvocation node) {
-      // TODO
+      Expression e = node.getExpression();
+      if ((e == null) || e.toString().equals(this.className)) {
+        String name = node.getName().getIdentifier();
+        MethodDeclaration md = this.methodMap.get(name);
+        if (md == null) {
+          throw new Error(node, "Could not resolve method: " + name);
+        }
+
+        this.result.put(node, md);
+      }
+
+      for (Object o : node.arguments()) {
+        ((ASTNode) o).accept(this);
+      }
+
       return false;
     }
 
     @Override
     public boolean visit(final SimpleName node) {
-      // TODO
+      String name = node.getIdentifier();
+      ASTNode decl = this.nameMap.get(name);
+      if (decl == null) {
+        throw new Error(node, "Could not resolve variable: " + name);
+      }
+
+      this.result.put(node, decl);
+
       return false;
     }
 
     @Override
     public boolean visit(final VariableDeclarationStatement node) {
-      // TODO
+      VariableDeclarationFragment vdf =
+          (VariableDeclarationFragment) node.fragments().get(0);
+      declareLocal(vdf.getName(), node);
+
       return false;
     }
 
@@ -177,7 +242,33 @@ public class SymbolTableBuilder {
 
     @Override
     public boolean visit(final TypeDeclaration node) {
-      // TODO
+      this.className = node.getName().getIdentifier();
+
+      if (!hasPublicModifier(node.modifiers())) {
+        if (this.classMap.containsKey(this.className)) {
+          throw new Error(node, "Duplicate class: " + this.className);
+        }
+
+        this.classMap.put(this.className, node);
+      }
+
+      for (FieldDeclaration fd : node.getFields()) {
+        fd.accept(this);
+      }
+
+      for (MethodDeclaration md : node.getMethods()) {
+        String name = md.getName().getIdentifier();
+        if (this.methodMap.containsKey(name)) {
+          throw new Error(md, "Duplicate method: " + name);
+        }
+
+        this.methodMap.put(name, md);
+      }
+
+      for (MethodDeclaration md : node.getMethods()) {
+        md.accept(this);
+      }
+
       return false;
     }
   }
